@@ -1,0 +1,21 @@
+<div class="post-head">
+    <div class="post-info">
+        <div class="post-title">
+            
+            <% if (page.title) {%>
+                <%= page.title %>
+            <% } else {%>
+                *Untitled
+            <% } %>
+            
+        </div>
+            <!-- 添加 description 显示 -->
+            <% if (page.description) { %>
+                <div class="post-description">
+                    <%= page.description %>
+                </div>
+            <% } %>
+    </div>
+    
+    <div class="h-line-primary"></div>
+</div>

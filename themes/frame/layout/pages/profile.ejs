@@ -1,0 +1,39 @@
+<head>
+    
+</head>
+
+<div class="profile">
+    <div class="profile-image">
+        <% if (theme.profile.image) {%>
+            <img src="<%= url_for(theme.profile.image)%>" alt="featured_image">
+        <% } %>  
+    </div>
+    <div class="post-content profile-content">
+        <div class="profile-title">
+            <%=theme.profile.title%>
+        </div>
+        <div class="profile-sign">
+            <%- theme.profile.sign%>
+        </div>
+
+        <div class="profile-fortune">
+            <% theme.profile.fortune.forEach(line => { %>
+                <p><%= line %></p>
+            <% }); %>
+        </div>
+
+        <div style="white-space: pre-line;"></div>
+
+        <% Object.keys(theme.profile.links).forEach(key => { %>
+            <div class="profile-link">
+                <a href="<%= url_for(theme.profile.links[key])%>"><%=key%></a> 
+            </div>           
+        <% }); %>
+
+        <div class="profile-body" style="white-space: pre-line;">
+            <%=theme.profile.body%>
+        </div>
+    </div>
+    
+    
+</div>

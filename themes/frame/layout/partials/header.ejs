@@ -1,0 +1,52 @@
+<div class="header">
+  <div class="flex-container">
+    <div class="header-inner">
+      <a href="<%= url_for('/') %>">
+        <div class="logo-images-container">
+          <% if (theme.logo_image.enable) { %>
+            <!-- 头像图标 -->
+            <img class="logo-img" src="<%= url_for(theme.logo_image.avatar_path) %>" alt="avatar_image">
+
+            <!-- GitHub 图标 -->
+            <a href="<%= theme.logo_image.github_path %>" target="_blank">
+              <img class="logo-img" src="<%= url_for(theme.logo_image.github_image_path) %>" alt="github_image">
+            </a>
+
+            <!-- 掘金图标 -->
+            <a href="<%= theme.logo_image.juejin_path %>" target="_blank">
+              <img class="logo-img" src="<%= url_for(theme.logo_image.jeujin_image_path) %>" alt="juejin_image">
+            </a>
+          <% } %>
+        </div>
+      </a>
+      <div id="menu-btn" class="menu-btn" onclick="toggleMenu()">
+        Menu
+      </div>
+      <nav class="site-nav">
+        <ul class="menu-list">
+          <% Object.keys(theme.menu).forEach(key => { %>
+            <% if (url_for(theme.menu[key]) + "index.html" == url_for(page.path)) { %>
+              <li class="menu-item menu-item-active">
+                <a href="<%= url_for(theme.menu[key]) %>">
+                  <%= key %>
+                </a>
+              </li>
+            <% } else { %>
+              <li class="menu-item">
+                <a href="<%= url_for(theme.menu[key]) %>">
+                  <%= key %>
+                </a>
+              </li>
+            <% } %>
+          <% }); %>
+
+          <% if (theme.local_search.enable) { %>
+            <li class="menu-item search-btn">
+              <a href="#">Search</a>
+            </li>
+          <% } %>
+        </ul>
+      </nav>
+    </div>
+  </div>
+</div>
