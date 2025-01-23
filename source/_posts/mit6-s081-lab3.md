@@ -224,3 +224,94 @@ make: 'kernel/kernel' is up to date.
 == Test trace children == trace children: OK (20.5s)
 ```
 
+
+
+### Sysinfo
+
+这个lab也是一个功能性的系统调用。获取操作系统中的工作线程数量与空闲内存
+
+需要依次添加修改:
+
+`kernel/kalloc.c`获取空闲内存
+
+```c
+uint64 kgetmem(void) {
+    uint64 retV = 0;
+    struct run* r;
+    r = kmem.freelist;
+    while (r != (void*)0) {
+        retV += PGSIZE;
+        r = r->next;
+    }
+    freemem = retV;
+    return retV;
+}
+```
+
+`kernel/proc.c`获取工作线程数量
+
+```c
+uint64 getunusedproc(void){
+    uint64 cnt = 0;
+    struct proc* p;
+    for (p = proc; p < &proc[NPROC]; p ++) {
+        if (p->state != UNUSED) {
+            cnt++;
+        }
+    }
+    return cnt;
+}
+```
+
+`kernel/sysinfo.c`ecall函数
+
+```c
+uint64 sys_info(void) {
+    uint64 info;
+    if (argaddr(0, &info) < 0) {
+        return -1;
+    }
+    int iaddr = ssinfo(info);
+    return iaddr;
+}
+```
+
+`kernel/info.c`组装&拷贝返回
+
+```c
+int ssinfo(uint64 addr) {
+    struct sysinfo s;
+    struct proc* p = myproc();
+
+    s.freemem = kgetmem();
+    s.nproc = getunusedproc();
+    if (s.freemem < 0 || s.nproc < 0) {
+        return -1;
+    }
+
+    if (copyout(p->pagetable, addr, (char*)&s, sizeof(s)) < 0) {
+        return -1;
+    }
+    return 0;
+}
+```
+
+*这里的这个kalloc本来是想 维护一个全局变量 然后在kfree和kalloc的时候 加减这个变量值就可以 然后在返回的时候 直接返回*
+
+*但是不知道为什么不行  有莫名其妙的bug 甚至加锁后会死锁？？ 就先这样吧 TODO*
+
+另外 假如是自己开一个新文件写在里面的话 需要将这个文件也一并注册在Makefile中编译（一个c初学者导致的低级bug）
+
+并且也需要像上面trace一样 在系统调用的各个环节都注册函数 在用户空间创建调用接口等
+
+该lab通过以下sh测试 测试结果有
+
+```bash
+$ sysinfotest
+sysinfotest: start
+sysinfotest: OK
+$ sysinfotest
+sysinfotest: start
+sysinfotest: OK
+```
+
