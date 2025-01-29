@@ -4,11 +4,9 @@ date: 2025-01-10 17:05:53
 tags: mit6.s081
 ---
 
-mit6.s081
+本人是一个c/c++只懂语法 项目工程化等东西一窍不通的初学者 所以之后的配置或者某些概念可能会写的比较琐碎基础 不足之处请多指教谢谢！
 
 # 0.配置Vs Code环境
-
-
 
 此处使用的是WSL
 
@@ -124,3 +122,39 @@ qemu-system-riscv64 -machine virt -bios none -kernel kernel/kernel -m 128M -smp 
 https://pdos.csail.mit.edu/6.828/2021/tools.html
 
 https://acmicpc.top/2024/02/08/MIT-6.S081-lab0-%E9%85%8D%E7%8E%AF%E5%A2%83/#%E9%85%8D%E7%BD%AEvscode%E5%92%8Cclangd
+
+
+
+
+
+
+
+### *clangd
+
+这玩意是一个程序 用于c/c++代码的格式化 vsCode中有对应的clangd的插件
+
+在WSL中使用需要规定它的路径
+
+![clangdPath](/./images/clangdPath.png)
+
+通过`which clangd`可获得其在PATH中对应的路径 填上即可使用
+
+同时使用的时候 往往都会绑定一个`compile_command.json`文件
+
+可以通过bear拦截Makefile的构建获得该文件 具体命令为`bear -- make qemu`
+
+
+
+假如在WSL中使用 并且VSCode右下方出现如这样的通知 
+
+> The '/usr/bin/clangd' language server was not found on your PATH. Would you like to download and install clangd 19.1.2?
+
+这种情况是因为VsCode是在Windows环境下本地打开更新的 可能找不到windows下对应路径的clangd
+
+![remote_explorer](/./images/remoteExplorer.png)
+
+左边通过 **Remote Explorer** 重新打开 对应的路径就ok
+
+从这里打开本质上就是在WSL中内置vsCode并且打开 所对应的路径当然就是WSL中的文件路径了
+
+另外 在WSL的终端中 直接`code`打开也ok
