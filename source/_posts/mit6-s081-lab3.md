@@ -119,11 +119,136 @@ void proc_freepagetable(pagetable_t pagetable, uint64 sz) {
 }
 ```
 
-测试脚本效果有：
+运行效果和测试脚本有：
 
 ```sh
 $ pgtbltest
 ugetpid_test starting
 ugetpid_test: OK
+```
+```
+chenz@Chenzc:~/lab$ sudo python3 grade-lab-pgtbl ugetpid
+make: 'kernel/kernel' is up to date.
+== Test pgtbltest == (3.1s)
+== Test   pgtbltest: ugetpid ==
+  pgtbltest: ugetpid: OK
+```
+
+
+
+### Print a page table
+
+该命令是要在xv6启动的时候 打印`init`进程涉及到的pte和物理地址
+
+在理解了内存管理的结构（多级页表）之后就很简单了 在递归寻找下一级页表与地址的时候`print`即可
+
+可根据hints理解一下`kernel/vm.c`中的`freewalk()`函数中的逻辑
+
+eg:
+
+```c
+// Recursively free page-table pages.
+// All leaf mappings must already have been removed.
+// 递归到最深层 解索引.
+void freewalk(pagetable_t pagetable) {
+    // there are 2^9 = 512 PTEs in a page table.
+    for (int i = 0; i < 512; i++) {
+        pte_t pte = pagetable[i];
+        // pte不存在 或PTE_V没有设置
+
+        // 标识非叶子节点（页目录项） 中间节点是没有R W X这些权限的
+        if ((pte & PTE_V) && (pte & (PTE_R | PTE_W | PTE_X)) == 0) {
+            // this PTE points to a lower-level page table.
+            uint64 child = PTE2PA(pte);
+            freewalk((pagetable_t)child);
+            // 清除其中内容
+            pagetable[i] = 0;
+
+            // 标识为叶子节点 只有物理的节点可以有R W X这些权限
+        } else if (pte & PTE_V) {
+            panic("freewalk: leaf");
+        }
+    }
+    kfree((void*)pagetable);
+}
+```
+
+`freewalk()`函数的作用是在函数使用之后回收空间
+
+于是就可以照葫芦画瓢的参照该遍历方式 在每一层页表的中间都打印其所对应的`pte`和`pa`
+
+然后在`exec()`中 注册一个分支语句就可以
+
+`kernel/exec.c exec()`
+
+```c
+int exec(char* path, char** argv) {
+    // 打印第一个进程的页表 1为初始深度
+    if (p->pid == 1) {
+        printf("page table %p\n", p->pagetable);
+        vmprint(p->pagetable, 1);
+    }
+	return argc;
+}
+```
+
+`kernel/vm.c` 创建一个递归遍历函数`vmprint()`
+
+```c
+void vmprint(pagetable_t pagetable, uint depth) {
+    for (int i = 0; i < 512; i++) {
+        pte_t pte = pagetable[i];
+
+        // 同理 非叶子节点 无权限
+        if ((pte & PTE_V) && (pte & (PTE_R | PTE_W | PTE_X)) == 0) {
+
+            // 获取目录项的内存
+            uint64 child = PTE2PA(pte);
+
+            // 遍历表示深度
+            for (int j = 1; j < depth; j++) {
+                printf(".. ");
+            }
+            printf("..");
+            printf("%d: pte %p pa %p\n", i, (void*)pte, (void*)child);
+
+            // 递归查找
+            vmprint((pagetable_t)child, depth + 1);
+
+            // 叶子节点
+        } else if (pte & PTE_V) {
+            printf(".. .. ..");
+            printf("%d: pte %p pa %p\n", i, (void*)pte, (void*)PTE2PA(pte));
+        }
+    }
+}
+```
+
+最后效果和测试程序有：
+
+```c
+xv6 kernel is booting
+
+hart 2 starting
+hart 1 starting
+page table 0x0000000087f6e000
+..0: pte 0x0000000021fda801 pa 0x0000000087f6a000
+.. ..0: pte 0x0000000021fda401 pa 0x0000000087f69000
+.. .. ..0: pte 0x0000000021fdac1f pa 0x0000000087f6b000
+.. .. ..1: pte 0x0000000021fda00f pa 0x0000000087f68000
+.. .. ..2: pte 0x0000000021fd9c1f pa 0x0000000087f67000
+..255: pte 0x0000000021fdb401 pa 0x0000000087f6d000
+.. ..511: pte 0x0000000021fdb001 pa 0x0000000087f6c000
+.. .. ..509: pte 0x0000000021fddc13 pa 0x0000000087f77000
+.. .. ..510: pte 0x0000000021fdd807 pa 0x0000000087f76000
+.. .. ..511: pte 0x0000000020001c0b pa 0x0000000080007000
+init: starting sh
+```
+
+```bash
+chenz@Chenzc:~/lab$ sudo python3 grade-lab-pgtbl printout
+[sudo] password for chenz:
+make: 'kernel/kernel' is up to date.
+== Test pte printout == pte printout: OK (2.9s)
 ```
 
