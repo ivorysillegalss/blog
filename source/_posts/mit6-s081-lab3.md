@@ -252,3 +252,119 @@ make: 'kernel/kernel' is up to date.
 == Test pte printout == pte printout: OK (2.9s)
 ```
 
+
+
+### Detecting which pages have been accessed
+
+该部分本质上就是提供某些页面是否有被使用的信息 通过`PTE_A` 判断自上次调用该方法之后 此页面是否有被访问过
+
+而在RISC-V中 往往硬件会为`PTE_A`设为1
+
+> **在硬件层面上**，`PTE_A` 是由硬件自动管理的标志位，当页面被访问时（无论是读取、写入还是执行），硬件会自动将 `PTE_A` 设置为 1。这个过程是完全由硬件（特别是内存管理单元MMU）在进行地址转换和页面访问时自动执行的，操作系统并不需要手动干预。
+
+通过hints可以在RISC-V手册中找到它所对应的宏可以设置为
+
+```c
+#define PTE_A (1L << 6)  // accessed 访问位
+```
+
+所以在调用到的时候 只需要清除该位中的值即可
+
+而获取这些有关的信息 需要将得到的va翻译为pte对象
+
+所以我这里是再次包装了一个方法 也可以直接把`walk()`函数暴露出来
+
+`kernel/vm.c walkaddr()`
+
+```c
+pte_t* walkpte(pagetable_t pagetable, uint64 va) {
+    return walk(pagetable, va, 0);
+}
+```
+
+题目提供的调用方法骨架中 形参分别为 **起始地址，页数量，结果存储指针**
+
+结合上方的思路 我们只需要配合`walkaddr()`函数 将对应对象的pte获取出来
+
+再判断对应的`PTE_A` 是否为所求
+
+合法的话加入结果掩码中即可
+
+最后通过`copyout()`将内核空间中的数据复制一份 以指针形式传递给用户空间.
+
+具体实现有：
+
+`kernel/proc.c & kernel/sysproc.c`这里分开了两个文件写 实际上分开合起来都没差
+
+```c
+# sysproc.c
+uint64 sys_pgaccess(void) {
+    uint64 start_address;
+    int pages_num;
+    uint64 bitmask_addr;
+    if (argaddr(0, &start_address) | argint(1, &pages_num) |
+        argaddr(2, &bitmask_addr)) {
+        return -1;
+    }
+    // 人为设置访问页上限 没有啥原因 PGSIZE好看而已
+    if (pages_num > PGSIZE) {
+        return -1;
+    }
+    return isaccessed(start_address, pages_num, bitmask_addr);
+}
+
+# proc.c
+int ceildivide(int a, int b) {
+    if (a % b == 0) {
+        return a / b;
+    }
+    return a / b + 1;
+}
+
+int isaccessed(uint64 start_address, int page_nums, uint64 bit_mask) {
+    struct proc* p = myproc();
+
+    uint8 bitmask[ceildivide(page_nums, 8)];
+    memset(bitmask, 0, sizeof(bitmask));
+
+    for (int i = 0; i < page_nums; i++) {
+        uint64 addr = start_address + i * PGSIZE;
+        if (addr > MAXVA)
+            return -1;
+
+        pte_t* pte = walkpte(p->pagetable, addr);
+        if (pte && (*pte & PTE_V) && (*pte & PTE_A)) {
+            bitmask[i / 8] |= (1 << (i % 8));
+            *pte &= ~PTE_A;
+        }
+    }
+    if (copyout(p->pagetable, bit_mask, (char*)&bitmask, sizeof(bitmask)) < 0) {
+        return -1;
+    }
+    return 0;
+}
+```
+
+当然了 需要在`defs.h`中注册`isaccessed()`
+
+以上完事
+
+程序运行和脚本测试结果有:
+
+```sh
+$ pgtbltest
+ugetpid_test starting
+ugetpid_test: OK
+pgaccess_test starting
+pgaccess_test: OK
+pgtbltest: all tests succeeded
+```
+
+```sh
+chenz@Chenzc:~/lab$ sudo python3 grade-lab-pgtbl pgaccess
+make: 'kernel/kernel' is up to date.
+== Test pgtbltest == (4.4s)
+== Test   pgtbltest: pgaccess ==
+  pgtbltest: pgaccess: OK
+```
+
