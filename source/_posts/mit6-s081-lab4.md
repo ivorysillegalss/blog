@@ -4,7 +4,7 @@ date: 2025-02-02 00:53:20
 tags: mit6.s081
 ---
 
-### RISC-V assembly
+## RISC-V assembly
 
 这个lab是回答一下问题并记录 此处就直接把问题分析和答案打上来了 答案通过chatGPT查验
 
@@ -235,3 +235,120 @@ A: 上方也已经解释过 跳转到`printf`的过程本质上也是一次调�
 
 **[Here's a description of little- and big-endian](http://www.webopedia.com/TERM/b/big_endian.html) and [a more whimsical description](http://www.networksorcery.com/enp/ien/ien137.txt).**
 这是对小端和大端的描述，以及一个更富有想象力的描述。
+
+
+
+
+
+---
+
+
+
+## Backtrace
+
+该lab为打印程序调用时的堆栈信息 重点在理解`fp`,`sp`,`ra`等概念以及作用
+
+其他部分暂不说明 这里仅解释lab中所需用到的部分
+
+ ![stack-architect](/images/stack_architect.png)
+
+这个是lecture中介绍的栈结构 由于在xv6中 地址是由高到低进行分配的 所以在这里可以和hints中可以观察到
+
+`fp`和`ra`的地址都是需要`fp - offset`这种方式计算出来的
+
+`ra`中存储的即为返回地址 可以通过`*(void *)(sp - 8)`计算得出
+
+`fp`中存储的是**上一个调用者的`sp`地址** 也是我们遍历堆栈所需用到的核心值 （可以类比链表树等的遍历方法思考）
+
+它的值可以通过`*(void *)(sp - 16)`得出
+
+
+
+总结一下上面的信息 整个代码的思路就比较清楚了
+
+主要就是构建一个循环（或者递归） 从现有的`sp`计算出`fp`，`ra` 然后基于`fp`进行下一次的遍历
+
+结合hints 以页顶部与底部作为遍历边界值 超过值默认终止循环
+
+
+
+从`kernel/printf.c`中改起
+
+```c
+void backtrace(void) {
+    printf("backtrace:\n");
+    
+    // 获取当前栈内的fp （上一个调用者栈内的栈指针）
+    uint64 fp = r_fp();
+    uint64 bottom = PGROUNDDOWN(fp);
+    uint64 top = PGROUNDUP(fp);
+
+    //超出当前栈默认遍历完毕
+    // 具体可参见xv6中的栈结构 fp中存储的是上一个调用者的指针位置 类比链表树
+    // 所以可以直接通过这个fp索引并且打印调用链
+    while (fp >= bottom && fp < top) {
+        printf("%p\n",  *(uint64*)(fp - 8));
+        fp = *(uint64*)(fp - 16);
+    }
+    return;
+}
+```
+
+其他就不需要改什么了
+
+`sysproc.c`
+
+```c
+uint64 sys_sleep(void) {
+	...
+    backtrace();
+    return 0;
+}
+```
+
+`riscv.h`
+
+```c
+// read value in s0 (which storage the stack frame pointer)
+// 读取当前的帧指针并且返回
+static inline uint64 r_fp() {
+    uint64 x;
+    asm volatile("mv %0, s0" : "=r"(x));
+    return x;
+}
+```
+
+`defs.h`
+
+```c
+// printf.c
+void backtrace(void);
+...
+```
+
+测试和脚本运行效果👉：
+
+```sh
+$ bttest
+backtrace:
+0x0000000080002524
+0x0000000080002356
+0x0000000080002044
+$ QEMU: Terminated
+chenz@Chenzc:~/lab$ addr2line -e kernel/kernel
+0x0000000080002524
+/home/chenz/lab/kernel/sysproc.c:64
+0x0000000080002356
+/home/chenz/lab/kernel/syscall.c:143
+0x0000000080002044
+/home/chenz/lab/kernel/trap.c:80
+```
+
+注意 验证方式是将自己通过运行`bttest`得到的`va`通过`add2line`进行验证... 可能会与官方存在些许不同
+
+```sh
+chenz@Chenzc:~/lab$ sudo python3 grade-lab-traps backtrace
+make: 'kernel/kernel' is up to date.
+== Test backtrace test == backtrace test: OK (3.0s)
+```
+
