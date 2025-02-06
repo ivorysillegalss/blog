@@ -352,3 +352,428 @@ make: 'kernel/kernel' is up to date.
 == Test backtrace test == backtrace test: OK (3.0s)
 ```
 
+
+
+## Alarm
+
+该部分的大致意思就是 实现一个计数器 记录定时器中断发生的次数 并且在触发一定次数后 执行回调函数
+
+**即提供一个可以注册回调函数 以及触发调用条件的API**
+
+Lab上分为`test0`和`test1/2` 这里也分开介绍 两者的思路本质上是一致的
+
+### test0
+
+这部分就是单纯完成`sys_sigalarm()`函数
+
+注册系统调用 调用流程上`syscall.c syscall.h usys.pl user.h Makefile`中也需要注册对应 这里不再赘述
+
+ 完成的思路其实可以参照`trace()`的完成步骤 在`proc.h`中新增包含对应流转信息的字段、结构体
+
+然后`allocproc()`中分配空间 当调用该系统调用`sys_sigalarm()`的时候 注册对应的条件
+
+在定时器中断的分支语句下 累计中断刻度次数 并且判断是否符合回调条件即可
+
+
+
+`proc.h`
+
+```c
+struct sigcontext {
+    int alramtick; // demanded alram ticks. 调用时机（触发调用的刻度数）
+    int ticks;  // ticks after last sigalarm. 自上次警告处理器过去 已经过去了多少个刻度
+    uint64 handler;  // func exec when alarm. sigalarm 的时候执行的函数
+};
+// Per-process state
+struct proc {
+	...
+	struct sigcontext sigcontext;
+};
+```
+
+`sysproc.c`
+
+```c
+// 注册传入的sigalarm函数
+uint64 sys_sigalarm(void) {
+    int ticks;
+    uint64 hp;
+    if (argint(0, &ticks) < 0 || argaddr(1, &hp)) {
+        return -1;
+    }
+    struct proc* p = myproc();
+    p->sigcontext.alramtick = ticks;
+    p->sigcontext.ticks = 0;
+    p->sigcontext.handler = hp;
+    return 0;
+}
+
+// test0中只需return0
+uint64 sys_sigreturn(void) {
+    return 0;
+}
+```
+
+`proc.c`
+
+```c
+static struct proc* allocproc(void) {
+    struct proc* p;
+    ...
+
+found:
+    ...
+        
+    // 为alarm函数分配空间
+    memset(&p->sigcontext, 0, sizeof(p->sigcontext));
+    p->sigcontext.alramtick = 0;
+    p->sigcontext.ticks = 0;
+    p->sigcontext.handler = 0;
+
+    return p;
+}
+```
+
+上述步骤 完成了初始化 存储调用条件和函数指针的阶段
+
+还差最关键的 **何时触发？**
+
+从hints中可以知道关键点在`trap.c`中的`usertrap()`函数当中 此处仅保留有用信息
+
+```c
+void usertrap(void) {
+    int which_dev = 0;
+    struct proc* p = myproc();
+    // 保存用户空间当前执行的进度（栈顶）
+    p->trapframe->epc = r_sepc();
+	...
+        
+    if (r_scause() == 8) {
+		...        
+    } else if ((which_dev = devintr()) != 0) {
+        // ok
+    } else {
+        ...
+    }
+
+    // give up the CPU if this is a timer interrupt.
+    // 定时片花完了 主动让出CPU
+    if (which_dev == 2) {
+        struct sigcontext* sigctx = &p->sigcontext;
+        sigctx->ticks++;
+        if (sigctx->ticks % sigctx->alramtick == 0) {
+            p->trapframe->epc = sigctx->handler; 
+        }
+        yield();
+    }
+    usertrapret();
+}
+
+```
+
+关键点主要是理解了这个`which_dev`的作用：当前中断的类型 当他为`2`的时候 就代表着定时器中断 所以需要`yield()`——主动让出当前的线程资源
+
+我们的目的是在定时器中断触发的时候 累加当前的刻度数
+
+于是就可以在`if(which_dev == 2)`的分支语句上做手脚 具体的逻辑语句也还都挺简单
+
+重点是将`p.trapframe.epc`中的值赋值为`p.sigctx.handler`
+
+这里的`handler`虽然是本质上是回调函数 但是它是以`uint64`的指针形式传进来的
+
+并且传进来的值 是对应函数的**栈顶** (stack frame)
+
+于是就可以通过设置的方式 进行注册  然后再通过下方`usertrapret()`达成一个 跳转到alarm函数的效果
+
+但是这个`epc`是当前 栈的运行情况啊 怎么能丢呢
+
+我也是这么想的 接下来看`test1/test2`中的修改吧
+
+（先放一下`test0`的脚本测试结果）
+
+```c
+$ alarmtest
+test0 start
+............alarm!
+test0 passed
+test1 start
+..alarm!
+.alarm!
+.QEMU: Terminated
+```
+
+可以看到 由于丢了`epc`原来的值 就没法正常停止`alarmtest`的运行了 会一直循环输出
+
+
+
+### test1/test2
+
+*这一部分修改了`sigcontext`按地址传递 并加上了`inalarm`的变量 这些修改不是lab所考察的 并且不影响代码结果 对应具体修改可以在`traps`分支下查看具体代码*
+
+于是这俩测试就是完成`sigreturn()`系统调用函数。将包括`epc`在内的寄存器信息保存下来，并且在完成陷入之后将保存了的信息恢复出来。
+
+问题就是 **要存哪些寄存器信息？ 在什么时机保存？在什么时机恢复？**
+
+- **什么时机保存？**
+
+问题是 如何在发生陷入的时候 保存数据
+
+**明确陷入的类型、alarm函数的调用**满足两个前提下的只有`usertrap()`函数下的`if(which_dev == 2)`的前提
+
+`trap.c`
+
+```c
+    // give up the CPU if this is a timer interrupt.
+    // 定时片花完了 主动让出CPU
+    if ((which_dev == 2) && (p->inalarm == 0)) {
+        struct sigcontext* sigctx = p->sigcontext;
+        if (p->sigcontext != 0) {
+            sigctx->ticks += 1;
+
+            // 判断是否满足回调条件
+            if (sigctx->alramtick != 0 && sigctx->ticks &&
+                sigctx->ticks == sigctx->alramtick) {
+                // 进入alarm函数内 清空计数器
+                p->inalarm = 1;
+                sigctx->ticks = 0;
+                // 保存寄存器中函数状态
+                saving_userregister(p);
+                // 存储epc的值
+                p->epc = p->trapframe->epc;
+                // 修改 执行alarm函数
+                p->trapframe->epc = sigctx->handler;
+            }
+        }
+        yield();
+    }
+```
+
+主要就是这三行的改动 具体的方法体在下方存储结构后给出
+
+```c
+                saving_userregister(p);
+                // 存储epc的值
+                p->epc = p->trapframe->epc;
+                // 修改 执行alarm函数
+                p->trapframe->epc = sigctx->handler;
+```
+
+
+
+
+
+
+- **存哪些？**
+
+这个陷入本质上和从用户空间陷入内核空间是同理的
+
+所以我们可以效仿已有陷入时的保存语句 具体可以有下面的字段
+
+`proc.h`
+
+```c
+struct sigregister {
+    /*  40 */ uint64 ra;
+    /*  48 */ uint64 sp;
+    /*  56 */ uint64 gp;
+    /*  64 */ uint64 tp;
+    /*  72 */ uint64 t0;
+    /*  80 */ uint64 t1;
+    /*  88 */ uint64 t2;
+    /*  96 */ uint64 s0;
+    /* 104 */ uint64 s1;
+    /* 112 */ uint64 a0;
+    /* 120 */ uint64 a1;
+    /* 128 */ uint64 a2;
+    /* 136 */ uint64 a3;
+    /* 144 */ uint64 a4;
+    /* 152 */ uint64 a5;
+    /* 160 */ uint64 a6;
+    /* 168 */ uint64 a7;
+    /* 176 */ uint64 s2;
+    /* 184 */ uint64 s3;
+    /* 192 */ uint64 s4;
+    /* 200 */ uint64 s5;
+    /* 208 */ uint64 s6;
+    /* 216 */ uint64 s7;
+    /* 224 */ uint64 s8;
+    /* 232 */ uint64 s9;
+    /* 240 */ uint64 s10;
+    /* 248 */ uint64 s11;
+    /* 256 */ uint64 t3;
+    /* 264 */ uint64 t4;
+    /* 272 */ uint64 t5;
+    /* 280 */ uint64 t6;
+};
+```
+
+将此字段加入线程结构体中 （以线程为颗粒度记录`alarm`时保存的信息）
+
+`proc.h`
+
+```c
+// Per-process state
+struct proc {
+   	...
+    struct sigregister sigregister; // save user program counter.
+    uint64 epc;   // cache pc container when using alarm.
+    int inalarm;  // clarify if it is alraming func.
+};
+```
+
+按照对应字段依次"入栈"存储 就有了具体的`saving_userregister()`函数
+
+`trap.c`
+
+```c
+void saving_userregister(struct proc* p) {
+    struct sigregister* s = &p->sigregister;
+    struct trapframe* t = p->trapframe;
+    s->ra = t->ra;
+    s->sp = t->sp;
+    s->gp = t->gp;
+    s->tp = t->tp;
+    s->t0 = t->t0;
+    s->t1 = t->t1;
+    s->t2 = t->t2;
+    s->s0 = t->s0;
+    s->s1 = t->s1;
+    s->a0 = t->a0;
+    s->a1 = t->a1;
+    s->a2 = t->a2;
+    s->a3 = t->a3;
+    s->a4 = t->a4;
+    s->a5 = t->a5;
+    s->a6 = t->a6;
+    s->a7 = t->a7;
+    s->s2 = t->s2;
+    s->s3 = t->s3;
+    s->s4 = t->s4;
+    s->s5 = t->s5;
+    s->s6 = t->s6;
+    s->s7 = t->s7;
+    s->s8 = t->s8;
+    s->s9 = t->s9;
+    s->s10 = t->s10;
+    s->s11 = t->s11;
+    s->t3 = t->t3;
+    s->t4 = t->t4;
+    s->t5 = t->t5;
+    s->t6 = t->t6;
+}
+```
+
+
+
+
+
+- **在什么时机恢复？**
+
+`alarmtest.c`
+
+```c
+void periodic() {
+    count = count + 1;
+    printf("alarm!\n");
+    sigreturn();
+}
+```
+
+查看`alarmtest()`中的测试用例  可知`sigreturn`是在`alarm`函数调用后恢复现场的
+
+Obviously 对应的恢复load寄存器代码就写在这玩意里
+
+`sysproc.c`
+
+
+```c
+uint64 sys_sigreturn(void) {
+    struct proc* p = myproc();
+    // 恢复现场
+    load_userregister(p);
+    p->trapframe->epc = p->epc;
+    p->inalarm = 0;
+    return 0;
+}
+```
+
+`proc.c`
+
+```c
+void load_userregister(struct proc* p) {
+    struct sigregister* s = &p->sigregister;
+    struct trapframe* t = p->trapframe;
+
+    t->ra = s->ra;
+    t->sp = s->sp;
+    t->gp = s->gp;
+    t->tp = s->tp;
+    t->t0 = s->t0;
+    t->t1 = s->t1;
+    t->t2 = s->t2;
+    t->s0 = s->s0;
+    t->s1 = s->s1;
+    t->a0 = s->a0;
+    t->a1 = s->a1;
+    t->a2 = s->a2;
+    t->a3 = s->a3;
+    t->a4 = s->a4;
+    t->a5 = s->a5;
+    t->a6 = s->a6;
+    t->a7 = s->a7;
+    t->s2 = s->s2;
+    t->s3 = s->s3;
+    t->s4 = s->s4;
+    t->s5 = s->s5;
+    t->s6 = s->s6;
+    t->s7 = s->s7;
+    t->s8 = s->s8;
+    t->s9 = s->s9;
+    t->s10 = s->s10;
+    t->s11 = s->s11;
+    t->t3 = s->t3;
+    t->t4 = s->t4;
+    t->t5 = s->t5;
+    t->t6 = s->t6;
+
+    return;
+}
+```
+
+写的时候出现了很多小问题 但是摊出来没多少东西 感觉还是得重新学下gdb 不是很会调试
+
+测试脚本和运行程序结果：
+
+```sh
+$ alarmtest
+test0 start
+......alarm!
+test0 passed
+test1 start
+.alarm!
+.alarm!
+..alarm!
+..alarm!
+.alarm!
+.alarm!
+.alarm!
+.alarm!
+.alarm!
+..alarm!
+test1 passed
+test2 start
+..........alarm!
+test2 passed
+```
+
+```sh
+chenz@Chenzc:~/lab$ sudo python3 grade-lab-traps alarm
+make: 'kernel/kernel' is up to date.
+== Test running alarmtest == (8.0s)
+== Test   alarmtest: test0 ==
+  alarmtest: test0: OK
+== Test   alarmtest: test1 ==
+  alarmtest: test1: OK
+== Test   alarmtest: test2 ==
+  alarmtest: test2: OK
+```
