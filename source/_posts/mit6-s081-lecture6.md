@@ -1,5 +1,5 @@
 ---
-title: mit6.s081-lecture6
+title: mit6.s081 lecture6
 date: 2025-01-31 20:27:11
 tags: mit6.s081
 ---
