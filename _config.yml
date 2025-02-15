@@ -8,8 +8,9 @@ subtitle: ''
 description: ''
 keywords:
 author: ivy_czc
-language: zh
+language: zh-CN
 timezone: 'Asia/Shanghai'
+email: chenzczczc@gmail.com
 
 # URL
 ## Set your site url here. For example, if you use GitHub Page, set url as 'https://username.github.io/project'

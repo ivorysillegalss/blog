@@ -333,6 +333,10 @@ PLIC负责管理 / 路由外设中断 将请求发送到某一个空闲的核当
 
 在这里称作 `typical driver`
 
+![](/./images/uartkernelfifo.png)
+
+
+
 
 
 在中断来的时候 我们需要：
